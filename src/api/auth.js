@@ -15,5 +15,5 @@ export async function loginUser({ email, password }) {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
   });
 
-  return resp.data; // { access_token, token_type }
+  return resp.data;
 }

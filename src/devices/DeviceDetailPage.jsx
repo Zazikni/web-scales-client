@@ -206,7 +206,6 @@ export default function DeviceDetailPage() {
     queryKey: ["autoUpdate", deviceId],
     queryFn: () => getAutoUpdate(deviceId),
   });
-
   const fetchM = useMutation({
     mutationFn: () => fetchProducts(deviceId),
     onSuccess: () => {

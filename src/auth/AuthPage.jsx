@@ -4,11 +4,26 @@ import { registerUser, loginUser } from "../api/auth";
 import { setToken } from "../utils/token";
 import { Toast } from "../components/Toast";
 
+/**
+ * Проверка email на базовую валидность.
+ * - Не используем тяжёлые зависимости.
+ * - Достаточно для UI-валидации перед отправкой на backend.
+ */
 function isValidEmail(v) {
   const s = String(v || "").trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 }
 
+/**
+ * Вычисление длины строки в байтах UTF-8.
+ * Зачем:
+ * - bcrypt имеет ограничение: максимум 72 байта (не символа).
+ * - Если пользователь введёт длинный пароль (особенно с Unicode),
+ *   то passlib/bcrypt может упасть или пароль будет «усечён».
+ * Реализация:
+ * - В современных браузерах используем TextEncoder().
+ * - В fallback используем encodeURIComponent/unescape.
+ */
 function utf8ByteLen(str) {
   try {
     return new TextEncoder().encode(String(str || "")).length;
@@ -17,25 +32,46 @@ function utf8ByteLen(str) {
   }
 }
 
+/**
+ * Валидация пароля.
+ * Параметр mode:
+ * - login: требования мягче (достаточно не пустого, но мы оставляем общие проверки).
+ * - register: требования строже, чтобы снизить риск слабых паролей.
+ *
+ * Возвращает:
+ * - пустую строку "" если всё ок
+ * - строку с ошибкой, если проверка не прошла
+ */
 function validatePassword(pw, { mode }) {
   const p = String(pw || "");
+
+  // Минимальная длина по символам (UI-правило)
   if (p.length < 8) return "Пароль должен быть не короче 8 символов";
 
+  // Ограничение bcrypt по байтам
   const bytes = utf8ByteLen(p);
   if (bytes > 72) {
-    return "Пароль слишком длинный (bcrypt ограничен 72 байтами). Сделайте пароль короче.";
+    return "Пароль слишком длинный. Сделайте пароль короче.";
   }
 
   if (/\s/.test(p)) return "Пароль не должен содержать пробелы";
 
+  // Для регистрации: требуем «буквы + цифры»
   const hasLetter = /[A-Za-zА-Яа-я]/.test(p);
   const hasDigit = /\d/.test(p);
   if (mode === "register" && !(hasLetter && hasDigit)) {
     return "Пароль должен содержать буквы и цифры";
   }
+
   return "";
 }
 
+/**
+ * Иконка «глаз» (показать/скрыть пароль).
+ * Реализована как inline-SVG без внешних библиотек.
+ * open=true  -> «открытый глаз»
+ * open=false -> «зачёркнутый глаз»
+ */
 function EyeIcon({ open }) {
   // простая SVG-иконка без зависимостей
   return open ? (
@@ -55,6 +91,17 @@ function EyeIcon({ open }) {
   );
 }
 
+/**
+ * Универсальный компонент поля пароля.
+ * Зачем:
+ * - В логине и регистрации одинаковое поведение (инпут, глаз, текст ошибки).
+ * - Не дублировать JSX.
+ *
+ * Важные моменты:
+ * - input type переключается text/password, чтобы показать/скрыть пароль
+ * - кнопка "глаз" — отдельная кнопка, чтобы не мешать вводу
+ * - error/help показываются ниже поля
+ */
 function PasswordField({
   label,
   value,
@@ -70,6 +117,7 @@ function PasswordField({
     <div className="field">
       <div className="label">{label}</div>
 
+      {/* Контейнер для инпута с иконкой справа (см. .input-with-icon в CSS) */}
       <div className="input-with-icon">
         <input
           className={`input ${error ? "error" : ""}`}
@@ -79,6 +127,8 @@ function PasswordField({
           autoComplete={autoComplete}
           placeholder={placeholder}
         />
+
+        {/* Ненавязчивая кнопка внутри поля (иконка глаза) */}
         <button
           type="button"
           className="icon-btn"
@@ -90,40 +140,74 @@ function PasswordField({
         </button>
       </div>
 
-      {error ? <div className="field-error">{error}</div> : help ? <div className="help">{help}</div> : null}
+      {/* Приоритет: ошибка > help > ничего */}
+      {error ? (
+        <div className="field-error">{error}</div>
+      ) : help ? (
+        <div className="help">{help}</div>
+      ) : null}
     </div>
   );
 }
 
+/**
+ * Главная страница авторизации/регистрации.
+ * Логика:
+ * - mode = login|register переключает табы и набор полей
+ * - email/password обязательны всегда
+ * - password2 (повтор) только для регистрации
+ * - при логине получаем access_token, сохраняем и редиректим на /devices
+ * - при регистрации создаём пользователя и переводим в режим login
+ */
 export default function AuthPage() {
   const nav = useNavigate();
 
+  // определяет какая форма активна
   const [mode, setMode] = useState("login");
+
+  // значения формы
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
 
+  // состояние отображения паролей (глаз)
   const [showPw, setShowPw] = useState(false);
   const [showPw2, setShowPw2] = useState(false);
 
+  // уведомления об успехе/ошибке
   const [toast, setToast] = useState({ message: "", type: "info" });
+
+  // loading — блокирует кнопку submit во время запроса
   const [loading, setLoading] = useState(false);
 
+  // хелпер для показа сообщений
   function show(message, type = "info") {
     setToast({ message, type });
   }
 
+  /**
+   * Валидация email:
+   * - useMemo чтобы не пересчитывать на каждый ререндер без изменений email
+   */
   const emailErr = useMemo(() => {
     if (!email.trim()) return "Введите email";
     if (!isValidEmail(email)) return "Некорректный email";
     return "";
   }, [email]);
 
+  /**
+   * Валидация пароля:
+   * - если пароль пустой -> просим ввести
+   * - дальше применяем validatePassword()
+   */
   const pwErr = useMemo(() => {
     if (!password) return "Введите пароль";
     return validatePassword(password, { mode });
   }, [password, mode]);
 
+  /**
+   * Валидация повторного пароля (только для register)
+   */
   const pw2Err = useMemo(() => {
     if (mode !== "register") return "";
     if (!password2) return "Повторите пароль";
@@ -131,12 +215,31 @@ export default function AuthPage() {
     return "";
   }, [mode, password, password2]);
 
+  /**
+   * canSubmit: можно ли отправлять форму
+   * - если есть ошибки email/password -> нельзя
+   * - в режиме register дополнительно учитываем pw2Err
+   */
   const canSubmit = useMemo(() => {
     if (emailErr || pwErr) return false;
     if (mode === "register" && pw2Err) return false;
     return true;
   }, [emailErr, pwErr, pw2Err, mode]);
 
+  /**
+   * Сабмит формы:
+   * предотвращаем перезагрузку страницы
+   * если форма невалидна -> показываем toast
+   * register:
+   *    - отправляем registerUser
+   *    - успех: показываем toast, переключаем на login, чистим пароли
+   * login:
+   *    - отправляем loginUser
+   *    - сохраняем access_token
+   *    - редирект на /devices
+   * обработка ошибок:
+   *    - поддержка axios-like структуры err.response.data.detail
+   */
   async function onSubmit(e) {
     e.preventDefault();
 
@@ -151,24 +254,41 @@ export default function AuthPage() {
 
       if (mode === "register") {
         await registerUser({ email: cleanEmail, password });
+
         show("Регистрация успешна. Теперь выполните вход.", "success");
+
+        // Переводим пользователя в режим входа после успешной регистрации
         setMode("login");
         setPassword("");
         setPassword2("");
       } else {
         const data = await loginUser({ email: cleanEmail, password });
+
+        // Сохраняем токен 
         setToken(data.access_token);
+
+        // Переходим к списку устройств
         nav("/devices");
       }
     } catch (err) {
+      // Пытаемся вытащить читаемое сообщение от backend
       const detail = err?.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : (err?.message || "Ошибка запроса");
+      const msg =
+        typeof detail === "string" ? detail : (err?.message || "Ошибка запроса");
+
       show(msg, "error");
     } finally {
       setLoading(false);
     }
   }
 
+  /**
+   * JSX-разметка:
+   * - auth-wrap центрирует карточку
+   * - auth-card--light делает форму светлой
+   * - tabs переключают login/register
+   * - форма выводит email + password + (password2 если register)
+   */
   return (
     <div className="auth-wrap">
       <div className="auth-card auth-card--light">
@@ -176,17 +296,20 @@ export default function AuthPage() {
           {mode === "login" ? "Войдите в аккаунт" : "Создайте аккаунт"}
         </h2>
 
+        {/* Табы переключают режим формы */}
         <div className="tabs auth-tabs">
           <button
             type="button"
             className={`tab ${mode === "login" ? "active" : ""}`}
             onClick={() => {
+              // при переходе в login сбрасываем повтор пароля
               setMode("login");
               setPassword2("");
             }}
           >
             Вход
           </button>
+
           <button
             type="button"
             className={`tab ${mode === "register" ? "active" : ""}`}
@@ -196,7 +319,9 @@ export default function AuthPage() {
           </button>
         </div>
 
+        {/* Основная форма */}
         <form onSubmit={onSubmit} className="form">
+          {/* Email */}
           <div className="field">
             <div className="label">Email</div>
             <input
@@ -210,18 +335,24 @@ export default function AuthPage() {
             {emailErr ? <div className="field-error">{emailErr}</div> : null}
           </div>
 
+          {/* Пароль */}
           <PasswordField
             label="Пароль"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder={mode === "register" ? "Минимум 8 символов" : ""}
             error={pwErr}
-            help={mode === "register" && !pwErr ? "Буквы + цифры. Максимум 72 байта. Без пробелов." : ""}
+            help={
+              mode === "register" && !pwErr
+                ? "Буквы и цифры. Максимум 72 символа. Без пробелов."
+                : ""
+            }
             show={showPw}
             onToggle={() => setShowPw((v) => !v)}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
           />
 
+          {/* Повтор пароля — только при регистрации */}
           {mode === "register" ? (
             <PasswordField
               label="Повтор пароля"
@@ -236,13 +367,24 @@ export default function AuthPage() {
             />
           ) : null}
 
-          <button className="btn primary lg" disabled={loading || !canSubmit} type="submit">
+          {/* Submit */}
+          <button
+            className="btn primary lg"
+            disabled={loading || !canSubmit}
+            type="submit"
+          >
             {loading ? "..." : mode === "login" ? "Далее" : "Создать аккаунт"}
           </button>
         </form>
       </div>
 
-      <Toast message={toast.message} type={toast.type} onClose={() => setToast({ message: "" })} />
+      {/* Toast показывает ошибки/успехи.
+          onClose очищает сообщение, чтобы скрыть toast */}
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: "" })}
+      />
     </div>
   );
 }

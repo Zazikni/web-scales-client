@@ -206,6 +206,38 @@ function computeStatus(p) {
   return { cls: "status-ok", label: "OK" };
 }
 
+/**
+ * В вашем JSON: PLU = pluNumber
+ * На всякий случай оставляем fallback'и для совместимости
+ */
+function getPlu(product) {
+  const candidates = [
+    product?.pluNumber, // <-- ГЛАВНОЕ
+    product?.plu,
+    product?.product_key,
+    product?.productKey,
+    product?.code,
+    product?.id,
+  ];
+  const found = candidates.find(
+    (x) => x !== undefined && x !== null && String(x).trim() !== ""
+  );
+  return found ?? null;
+}
+
+/**
+ * У вас срок годности: shelfLife (а не shelfLifeInDays)
+ * Оставим функцию для нормализации.
+ */
+function getShelfLifeDays(p) {
+  const candidates = [
+    p?.shelfLife, // <-- ГЛАВНОЕ
+    p?.shelfLifeInDays,
+  ];
+  const found = candidates.find((x) => x !== undefined && x !== null && x !== "");
+  return toNum(found, 0);
+}
+
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const deviceId = Number(id);
@@ -241,7 +273,7 @@ export default function DeviceDetailPage() {
     }, 2500);
   }
 
-  // Cleanup таймера при уходе со страницы
+  // Важно: очищаем таймер при размонтировании компонента
   useEffect(() => {
     return () => {
       if (syncedTimerRef.current) {
@@ -250,10 +282,6 @@ export default function DeviceDetailPage() {
       }
     };
   }, []);
-
-  if (!isValidDeviceId) {
-    return <div className="sub">Некорректный идентификатор устройства</div>;
-  }
 
   const deviceQ = useQuery({
     queryKey: qk.device(deviceId),
@@ -273,10 +301,6 @@ export default function DeviceDetailPage() {
     enabled: isValidDeviceId,
   });
 
-  /**
-   * Выгрузка товаров с весов в backend-кэш.
-   * После успеха обновляем: кэш товаров + устройство + список устройств (cached_dirty бейджи).
-   */
   const fetchM = useMutation({
     mutationFn: () => fetchProducts(deviceId),
     onSuccess: async () => {
@@ -289,10 +313,6 @@ export default function DeviceDetailPage() {
     },
   });
 
-  /**
-   * Загрузка изменений из backend-кэша в весы.
-   * После успеха обновляем: кэш товаров + устройство + список устройств, и показываем flash.
-   */
   const uploadM = useMutation({
     mutationFn: () => uploadCache(deviceId),
     onSuccess: async () => {
@@ -306,10 +326,6 @@ export default function DeviceDetailPage() {
     },
   });
 
-  /**
-   * PATCH одного товара в backend-кэше по PLU (pluNumber).
-   * Важно: это ещё не применение на весы, только изменение кэша.
-   */
   const patchM = useMutation({
     mutationFn: ({ plu, fields }) => patchProductByPlu(deviceId, plu, fields),
     onSuccess: async () => {
@@ -322,10 +338,6 @@ export default function DeviceDetailPage() {
     },
   });
 
-  /**
-   * Настройки автообновления сроков годности.
-   * После успеха обновляем: autoUpdate + device + devices.
-   */
   const autoM = useMutation({
     mutationFn: (payload) => setAutoUpdate(deviceId, payload),
     onSuccess: async () => {
@@ -350,38 +362,20 @@ export default function DeviceDetailPage() {
     if (!q) return products;
 
     return products.filter((p) => {
-      const pluStr = String(p?.pluNumber ?? "").toLowerCase();
+      const plu = getPlu(p);
+      const pluStr = plu != null ? String(plu).toLowerCase() : "";
       const name = p?.name ? String(p.name).toLowerCase() : "";
       return pluStr.includes(q) || name.includes(q);
     });
   }, [products, query]);
 
-  // Черновик интервала (чтобы не слать PUT на каждый ввод)
-  const [intervalDraft, setIntervalDraft] = useState(60);
-
-  useEffect(() => {
-    if (autoQ.data?.interval_minutes != null) {
-      setIntervalDraft(normalizeIntervalMinutes(autoQ.data.interval_minutes, 60));
-    }
-  }, [autoQ.data]);
-
-  function commitIntervalDraft() {
-    // Если autoQ ещё не загружен — нечего сохранять
-    if (!autoQ.data) return;
-
-    autoM.mutate({
-      enabled: !!autoQ.data.enabled,
-      interval_minutes: normalizeIntervalMinutes(intervalDraft, 60),
-    });
-  }
-
   // ===== modal state =====
   const [editOpen, setEditOpen] = useState(false);
   const [edit, setEdit] = useState({
-    pluNumber: 0, // <-- строго pluNumber
+    plu: "",
     name: "",
     price: "",
-    shelfLife: "", // <-- строго shelfLife
+    shelfLife: "",
     manufactureDate: "",
     sellByDate: "",
   });
@@ -392,14 +386,15 @@ export default function DeviceDetailPage() {
   });
 
   function openEdit(p) {
+    const plu = getPlu(p);
     const mfg = maskDDMMYY(p?.manufactureDate || "");
     const sell = maskDDMMYY(p?.sellByDate || "");
 
     setEdit({
-      pluNumber: Number(p?.pluNumber || 0),
+      plu: plu ?? "",
       name: p?.name ?? "",
-      price: String(p?.price ?? ""),
-      shelfLife: String(p?.shelfLife ?? ""), // <-- строго shelfLife
+      price: p?.price ?? "",
+      shelfLife: String(getShelfLifeDays(p) ?? ""),
       manufactureDate: mfg,
       sellByDate: sell,
     });
@@ -434,20 +429,20 @@ export default function DeviceDetailPage() {
   }
 
   function saveEdit() {
-    const plu = Number(edit.pluNumber);
-    if (!Number.isFinite(plu) || plu <= 0) {
-      show("Некорректный PLU (pluNumber)", "error");
+    const pluNum = Number(edit.plu);
+    if (!Number.isFinite(pluNum) || pluNum <= 0) {
+      show("Некорректный PLU", "error");
       return;
     }
 
     if (!validateDatesOrStop()) return;
 
     patchM.mutate({
-      plu,
+      plu: pluNum,
       fields: {
         name: String(edit.name),
         price: toNum(edit.price, 0),
-        shelfLife: toNum(edit.shelfLife, 0), // <-- строго shelfLife
+        shelfLife: toNum(edit.shelfLife, 0),
         manufactureDate: String(edit.manufactureDate || ""),
         sellByDate: String(edit.sellByDate || ""),
       },
@@ -457,10 +452,12 @@ export default function DeviceDetailPage() {
   }
 
   if (deviceQ.isLoading) return <div className="sub">Загрузка...</div>;
-  if (deviceQ.isError) {
-    const { message } = extractErrorMessage(deviceQ.error);
-    return <div style={{ color: "#b42318" }}>{message || "Device error"}</div>;
-  }
+  if (deviceQ.isError)
+    return (
+      <div style={{ color: "#b42318" }}>
+        {deviceQ.error?.response?.data?.detail || "Device error"}
+      </div>
+    );
 
   const device = deviceQ.data;
 
@@ -477,30 +474,19 @@ export default function DeviceDetailPage() {
         >
           <div
             className="sub"
-            style={{
-              display: "flex",
-              gap: 10,
-              alignItems: "center",
-              flexWrap: "wrap",
-            }}
+            style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}
           >
             <span>
               {device.ip}:{device.port} · {device.protocol}
             </span>
 
             {syncedFlash ? (
-              <span
-                className="badge badge-success"
-                title="Изменения применены на устройство"
-              >
+              <span className="badge badge-success" title="Изменения применены на устройство">
                 <span className="badge-dot badge-dot-success" />
                 <span className="badge-text">Синхронизировано</span>
               </span>
             ) : device.cached_dirty ? (
-              <span
-                className="badge"
-                title="В кэше есть изменения, которые ещё не применены на устройстве"
-              >
+              <span className="badge" title="В кэше есть изменения, которые ещё не применены на устройстве">
                 <span className="badge-dot" />
                 <span className="badge-text">Есть незагруженные изменения</span>
               </span>
@@ -534,7 +520,7 @@ export default function DeviceDetailPage() {
           <div className="sub">Загрузка...</div>
         ) : autoQ.isError ? (
           <div style={{ color: "#b42318" }}>
-            {extractErrorMessage(autoQ.error).message || "Ошибка автообновления"}
+            {autoQ.error?.response?.data?.detail || "Ошибка автообновления"}
           </div>
         ) : (
           <div
@@ -555,7 +541,7 @@ export default function DeviceDetailPage() {
                     enabled,
                     interval_minutes: normalizeIntervalMinutes(
                       autoQ.data.interval_minutes,
-                      1
+                      60
                     ),
                   });
                 }}
@@ -567,13 +553,13 @@ export default function DeviceDetailPage() {
               <input
                 className="input"
                 type="number"
-                value={intervalDraft}
-                onChange={(e) => setIntervalDraft(e.target.value)}
-                onBlur={commitIntervalDraft}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitIntervalDraft();
-                }}
-                disabled={autoM.isPending}
+                value={autoQ.data.interval_minutes}
+                onChange={(e) =>
+                  autoM.mutate({
+                    enabled: !!autoQ.data.enabled,
+                    interval_minutes: normalizeIntervalMinutes(e.target.value, 60),
+                  })
+                }
               />
             </div>
 
@@ -618,7 +604,7 @@ export default function DeviceDetailPage() {
             <div className="sub">Загрузка кэша...</div>
           ) : cachedQ.isError ? (
             <div style={{ color: "#b42318" }}>
-              {extractErrorMessage(cachedQ.error).message || "Ошибка кэша"}
+              {cachedQ.error?.response?.data?.detail || "Ошибка кэша"}
             </div>
           ) : (
             <div className="products-grid">
@@ -626,10 +612,23 @@ export default function DeviceDetailPage() {
                 <div className="sub">Нет товаров</div>
               ) : (
                 filtered.map((p) => {
+                  const plu = getPlu(p);
                   const status = computeStatus(p);
 
                   return (
-                    <div className="product-card" key={String(p.pluNumber)}>
+                    <div
+                      className="product-card"
+                      key={String(plu ?? p?.id ?? p?.code ?? p?.name ?? Math.random())}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openEdit(p)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openEdit(p);
+                        }
+                      }}
+                    >
                       <div className="product-top">
                         <div>
                           <div className="product-title">
@@ -637,7 +636,7 @@ export default function DeviceDetailPage() {
                           </div>
                           <div className="product-subtitle">
                             <span className="pill pill-strong">
-                              PLU: {p?.pluNumber ?? "—"}
+                              PLU: {plu ?? "—"}
                             </span>{" "}
                             <span className={`status-pill ${status.cls}`}>
                               {status.label}
@@ -653,7 +652,7 @@ export default function DeviceDetailPage() {
                         </div>
                         <div className="kpi">
                           <div className="kpi-label">Срок годности (дн)</div>
-                          <div className="kpi-value">{toNum(p?.shelfLife, 0)}</div>
+                          <div className="kpi-value">{getShelfLifeDays(p)}</div>
                         </div>
                       </div>
 
@@ -671,16 +670,6 @@ export default function DeviceDetailPage() {
                           </div>
                         </div>
                       </div>
-
-                      <div className="product-actions">
-                        <button
-                          className="btn-soft"
-                          type="button"
-                          onClick={() => openEdit(p)}
-                        >
-                          Редактировать
-                        </button>
-                      </div>
                     </div>
                   );
                 })
@@ -693,7 +682,7 @@ export default function DeviceDetailPage() {
       <Modal
         open={editOpen}
         title="Редактирование товара"
-        subtitle={edit.pluNumber ? `PLU: ${edit.pluNumber}` : ""}
+        subtitle={edit.plu ? `PLU: ${edit.plu}` : ""}
         onClose={closeEdit}
         footer={
           <>
@@ -739,7 +728,9 @@ export default function DeviceDetailPage() {
               <input
                 className="input"
                 value={edit.price}
-                onChange={(e) => setEdit((p) => ({ ...p, price: e.target.value }))}
+                onChange={(e) =>
+                  setEdit((p) => ({ ...p, price: e.target.value }))
+                }
                 inputMode="numeric"
               />
             </div>
@@ -754,6 +745,7 @@ export default function DeviceDetailPage() {
                 }
                 inputMode="numeric"
               />
+              {/* Пустая подсказка для визуального выравнивания с полем даты */}
               <div className="help" style={{ visibility: "hidden" }}>
                 Введите 6 цифр — дефисы подставятся автоматически
               </div>

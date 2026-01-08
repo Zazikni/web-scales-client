@@ -836,3 +836,24 @@ a {
   border-color: rgba(22, 163, 74, 0.35);
   color: rgba(22, 163, 74, 0.95);
 }
+
+.product-card[role="button"] {
+  cursor: pointer;
+}
+
+
+.product-card[role="button"]:hover {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+
+.product-card[role="button"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.12);
+}
+
+
+.product-card[role="button"]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.14);
+}

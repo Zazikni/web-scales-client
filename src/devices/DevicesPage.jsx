@@ -100,7 +100,7 @@ export default function DevicesPage() {
   const [modalOpen, setModalOpen] = useState(false);
 
   // СОСТОЯНИЕ ФОРМЫ
-  // Требование: пароль обязателен, по умолчанию "1234"
+  // Пароль обязателен, по умолчанию "1234"
   const [form, setForm] = useState({
     name: "",
     description: "",
@@ -171,9 +171,8 @@ export default function DevicesPage() {
       const protocol = String(form.protocol || "TCP");
       const password = String(form.password || "").trim();
 
-      // ВАЖНО:
+
       // backend ожидает строку для description. Если поле пустое — НЕ отправляем его вообще.
-      // JSON.stringify удалит поля со значением undefined.
       const descriptionTrimmed = String(form.description || "").trim();
 
       const payload = {

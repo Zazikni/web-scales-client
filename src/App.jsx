@@ -7,7 +7,20 @@ import AuthPage from "./auth/AuthPage";
 import DevicesPage from "./devices/DevicesPage";
 import DeviceDetailPage from "./devices/DeviceDetailPage";
 
+import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { isAuthed } from "./utils/token";
+
 export default function App() {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    // Если пользователь считается не авториз 
+    if (!isAuthed()) {
+      // Очистка всех кешированных серверных данных
+      qc.clear();
+    }
+  }, [qc]);
   return (
     <Layout>
       <Routes>

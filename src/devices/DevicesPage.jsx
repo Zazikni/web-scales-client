@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Modal } from "../components/Modal";
 import { Toast } from "../components/Toast";
+import { qk } from "../query/keys";
+import { invalidateDevicesList } from "../query/invalidate";
 
 // API-слой (axios через src/api/http.js)
 import { listDevices, createDevice, deleteDevice } from "../api/devices";
@@ -39,25 +41,32 @@ function extractErrorMessage(err) {
   }
 
   if (Array.isArray(detail) && detail.length) {
-    // Собраем короткое сообщение из ошибок валидации
     const parts = detail
       .map((x) => {
         const loc = Array.isArray(x?.loc) ? x.loc.join(".") : "";
         const msg = x?.msg ? String(x.msg) : "";
         if (loc && msg) return `${loc}: ${msg}`;
-        return msg || JSON.stringify(x);
+        return msg || "";
       })
       .filter(Boolean);
 
     if (parts.length) return { status, message: parts.join("; ") };
+
+    try {
+      return { status, message: JSON.stringify(detail) };
+    } catch {
+      // ignore
+    }
   }
 
   if (detail && typeof detail === "object") {
     try {
       return { status, message: JSON.stringify(detail) };
     } catch {
+      // ignore
     }
   }
+
   if (err?.message) return { status, message: String(err.message) };
 
   return { status, message: "Неизвестная ошибка" };
@@ -69,32 +78,45 @@ export default function DevicesPage() {
 
   const [toast, setToast] = useState({ message: "", type: "info" });
   function show(message, type = "info") {
-    setToast({ message, type });
+    const safeMsg =
+      typeof message === "string"
+        ? message
+        : (() => {
+            try {
+              return JSON.stringify(message);
+            } catch {
+              return "Неизвестная ошибка";
+            }
+          })();
+    setToast({ message: safeMsg, type });
   }
 
   const devicesQ = useQuery({
-    queryKey: ["devices"],
+    queryKey: qk.devices(),
     queryFn: listDevices,
   });
-  // СОСТОЯНИЕ МОДАЛКИ 
+
+  // СОСТОЯНИЕ МОДАЛКИ
   const [modalOpen, setModalOpen] = useState(false);
-  // СОСТОЯНИЕ  ФОРМЫ
+
+  // СОСТОЯНИЕ ФОРМЫ
+  // Требование: пароль обязателен, по умолчанию "1234"
   const [form, setForm] = useState({
     name: "",
     description: "",
     ip: "",
     port: 1111,
     protocol: "TCP",
-    password: "",
+    password: "1234",
   });
+
   // Ошибки валидации формы
   const [errors, setErrors] = useState({
     name: "",
     ip: "",
     port: "",
+    password: "",
   });
-
-  // Сброс формы к значениям по умолчанию.
 
   function resetForm() {
     setForm({
@@ -103,9 +125,9 @@ export default function DevicesPage() {
       ip: "",
       port: 1111,
       protocol: "TCP",
-      password: "",
+      password: "1234",
     });
-    setErrors({ name: "", ip: "", port: "" });
+    setErrors({ name: "", ip: "", port: "", password: "" });
   }
 
   function openModal() {
@@ -116,9 +138,10 @@ export default function DevicesPage() {
   function closeModal() {
     setModalOpen(false);
   }
-  // ВАЛИДАЦИЯ ФОРМЫ 
+
+  // ВАЛИДАЦИЯ ФОРМЫ
   function validate() {
-    const e = { name: "", ip: "", port: "" };
+    const e = { name: "", ip: "", port: "", password: "" };
 
     if (!String(form.name || "").trim()) e.name = "Укажите имя устройства";
 
@@ -130,33 +153,45 @@ export default function DevicesPage() {
       e.port = "Порт должен быть в диапазоне 1..65535";
     }
 
+    const pwd = String(form.password || "").trim();
+    if (!pwd) e.password = "Пароль обязателен (по умолчанию 1234)";
+
     setErrors(e);
-    return !e.name && !e.ip && !e.port;
+    return !e.name && !e.ip && !e.port && !e.password;
   }
+
   // СОЗДАНИЕ УСТРОЙСТВА
   const createM = useMutation({
     mutationFn: async () => {
       if (!validate()) throw new Error("validation");
-      // Приводим payload к виду, ожидаемому backend
+
+      const name = String(form.name || "").trim();
+      const ip = String(form.ip || "").trim();
+      const port = parsePort(form.port);
+      const protocol = String(form.protocol || "TCP");
+      const password = String(form.password || "").trim();
+
+      // ВАЖНО:
+      // backend ожидает строку для description. Если поле пустое — НЕ отправляем его вообще.
+      // JSON.stringify удалит поля со значением undefined.
+      const descriptionTrimmed = String(form.description || "").trim();
+
       const payload = {
-        name: String(form.name || "").trim(),
-        description: String(form.description || "").trim() || null,
-        ip: String(form.ip || "").trim(),
-        port: parsePort(form.port),
-        protocol: String(form.protocol || "TCP"),
-        password: String(form.password || "").trim() || null,
+        name,
+        ip,
+        port,
+        protocol,
+        password,
+        description: descriptionTrimmed ? descriptionTrimmed : undefined,
       };
 
-      // Защита
-      if (!Number.isFinite(payload.port)) {
-        throw new Error("validation");
-      }
+      if (!Number.isFinite(payload.port)) throw new Error("validation");
+      if (!payload.password) throw new Error("validation");
 
       return createDevice(payload);
     },
     onSuccess: async () => {
-      // Инвалидируем список — UI всегда синхронизируется с backend
-      await qc.invalidateQueries({ queryKey: ["devices"] });
+      await invalidateDevicesList(qc);
       show("Устройство добавлено", "success");
       closeModal();
     },
@@ -165,14 +200,12 @@ export default function DevicesPage() {
 
       const { status, message } = extractErrorMessage(err);
 
-      // 401: токен недействителен/истёк — уходим на авторизацию
       if (status === 401) {
         show("Сессия истекла. Войдите снова.", "error");
         navigate("/auth", { replace: true });
         return;
       }
 
-      // 422: ошибка валидации на backend — покажем detail
       if (status === 422) {
         show(message || "Ошибка валидации данных", "error");
         return;
@@ -181,11 +214,12 @@ export default function DevicesPage() {
       show(message || "Ошибка добавления устройства", "error");
     },
   });
+
   // УДАЛЕНИЕ УСТРОЙСТВА
   const deleteM = useMutation({
     mutationFn: (deviceId) => deleteDevice(deviceId),
     onSuccess: async () => {
-      await qc.invalidateQueries({ queryKey: ["devices"] });
+      await invalidateDevicesList(qc);
       show("Устройство удалено", "success");
     },
     onError: (err) => {
@@ -200,6 +234,7 @@ export default function DevicesPage() {
       show(message || "Ошибка удаления", "error");
     },
   });
+
   // НОРМАЛИЗАЦИЯ ДАННЫХ
   const devices = useMemo(() => {
     if (Array.isArray(devicesQ.data)) return devicesQ.data;
@@ -309,20 +344,10 @@ export default function DevicesPage() {
         onClose={closeModal}
         footer={
           <>
-            <button
-              className="btn"
-              type="button"
-              onClick={closeModal}
-              disabled={createM.isPending}
-            >
+            <button className="btn" type="button" onClick={closeModal} disabled={createM.isPending}>
               Отмена
             </button>
-            <button
-              className="btn primary"
-              type="button"
-              onClick={() => createM.mutate()}
-              disabled={createM.isPending}
-            >
+            <button className="btn primary" type="button" onClick={() => createM.mutate()} disabled={createM.isPending}>
               {createM.isPending ? "..." : "Добавить"}
             </button>
           </>
@@ -347,6 +372,7 @@ export default function DevicesPage() {
               value={form.description}
               onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
             />
+            <div className="help">Можно оставить пустым — поле не будет отправлено на backend.</div>
           </div>
 
           <div className="modal-grid-3">
@@ -389,11 +415,18 @@ export default function DevicesPage() {
           <div className="field">
             <div className="label">Пароль</div>
             <input
-              className="input"
+              className={`input ${errors.password ? "error" : ""}`}
               value={form.password}
               onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))}
               type="password"
+              placeholder="1234"
+              autoComplete="new-password"
             />
+            {errors.password ? (
+              <div className="field-error">{errors.password}</div>
+            ) : (
+              <div className="help">Пароль обязателен. По умолчанию: 1234</div>
+            )}
           </div>
 
           <div className="sub" style={{ marginTop: 6 }}>

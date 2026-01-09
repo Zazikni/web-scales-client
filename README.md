@@ -1,16 +1,133 @@
-# React + Vite
+# Web Scales Manager — Web-клиент управления торговыми весами
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Краткое описание проекта
 
-Currently, two official plugins are available:
+Данный репозиторий содержит frontend-часть информационной системы **Web Scales Manager**, предназначенной для централизованного управления торговыми весами Mertech (в том числе серии M-ER 725) через web-интерфейс.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Проект решает следующие задачи:
+- управление списком торговых весов, привязанных к аккаунту пользователя;
+- взаимодействие с backend-сервисом для получения и обновления данных устройств;
+- просмотр, поиск и редактирование товарной номенклатуры весов;
+- загрузка и выгрузка товаров между весами и серверным кэшем;
+- настройка автоматического обновления сроков годности товаров.
 
-## React Compiler
+Проект предназначен для сотрудников розничных торговых предприятий, а также для администраторов и разработчиков, сопровождающих такие системы.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Ключевые особенности проекта:
+- web-интерфейс без необходимости установки специализированного ПО;
+- авторизация пользователей и изоляция данных по аккаунтам;
+- кэширование данных и их синхронизация с backend;
+- редактирование товаров с контролем сроков годности;
+- модуль автообновления сроков годности;
+- устойчивость к сетевым ошибкам и сбоям устройств.
 
-## Expanding the ESLint configuration
+---
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Технологический стек проекта
+
+- **Языки программирования**
+  - JavaScript (ES6+)
+
+- **Фреймворки и библиотеки**
+  - React
+  - React Router
+  - TanStack React Query
+  - Axios
+
+- **Инструменты и среды**
+  - Node.js
+  - Vite
+  - Git
+
+- **Протоколы и форматы**
+  - HTTP / REST API
+  - JSON
+
+---
+
+## Структура репозитория
+
+```
+├── src/                         # Исходный код frontend-приложения
+│   ├── api/                     # API-слой: запросы к backend (axios)
+│   │   └── devices.js           # Работа с устройствами и товарами
+│   │
+│   ├── components/              # Переиспользуемые UI-компоненты
+│   │   ├── Modal.jsx            # Модальные окна
+│   │   └── Toast.jsx            # Уведомления
+│   │
+│   ├── pages/                   # Страницы приложения
+│   │   ├── DevicesPage.jsx      # Список и добавление устройств
+│   │   └── DeviceDetailPage.jsx # Детальная страница устройства
+│   │
+│   ├── query/                   # Работа с TanStack React Query
+│   │   ├── keys.js              # Ключи запросов
+│   │   └── invalidate.js        # Централизованная инвалидация кэша
+│   │
+│   ├── utils/                   # Вспомогательные утилиты
+│   │   ├── token.js             # Работа с токеном авторизации
+│   │   └── datetime.js          # Преобразование дат и времени
+│   │
+│   ├── App.jsx                  # Корневой компонент приложения
+│   └── main.jsx                 # Точка входа (ReactDOM)
+│
+├── public/                      # Статические ресурсы
+│
+├── index.html                   # HTML-шаблон
+├── package.json                 # Зависимости и npm-скрипты
+├── vite.config.js               # Конфигурация сборщика Vite
+├── .gitignore                   # Исключения Git
+├── .env.example                 # Пример переменных окружения
+└── README.md                    # Описание проекта
+```
+
+---
+
+## Установка
+
+1. Клонируйте репозиторий:
+
+```bash
+git clone https://vcs.uni-dubna.ru/vkr-myproject-myname/user-path-if-need/web-scales-client.git
+cd web-scales-client
+```
+
+2. Установите зависимости (Node.js 18+):
+
+```bash
+npm install
+```
+
+3. Создайте файл `.env` на основе примера и укажите адрес backend-сервиса:
+
+```env
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+4. Запустите проект в режиме разработки:
+
+```bash
+npm run dev
+```
+
+Приложение будет доступно по адресу:
+
+```
+http://localhost:5173
+```
+
+---
+
+## Использование
+
+Приложение позволяет:
+- управлять списком торговых весов;
+- просматривать и редактировать товары;
+- выгружать и загружать данные между сервером и весами;
+- настраивать автоматическое обновление сроков годности товаров.
+
+Все изменения товаров сначала сохраняются в серверный кэш и применяются к устройству только после явной команды **«Загрузить в весы»**.
+
+---
+
+Проект разработан в рамках выпускной квалификационной работы по направлению **«Программная инженерия»**.

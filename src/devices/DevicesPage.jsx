@@ -406,7 +406,6 @@ export default function DevicesPage() {
                 onChange={(e) => setForm((p) => ({ ...p, protocol: e.target.value }))}
               >
                 <option value="TCP">TCP</option>
-                <option value="UDP">UDP</option>
               </select>
             </div>
           </div>
